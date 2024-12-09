@@ -4,3 +4,1283 @@
 #Thijn , i6223547"
 
 
+---
+title: "Groupassignment Citibikes"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+
+
+# -------------------------
+# Install and Load Packages
+# -------------------------
+
+# List of required packages
+required_packages <- c("forecast", "ggplot2", "tseries", "Metrics", "dplyr",
+                       "lubridate", "gridExtra", "scales", "tidyr", "TSstudio",
+                       "tsibble", "feasts", "fable", "nnet", "devtools", "MCS",
+                       "zoo", "readr")
+
+# Installation of missing packages
+installed_packages <- rownames(installed.packages())
+for (pkg in required_packages) {
+  if (!(pkg %in% installed_packages)) {
+    install.packages(pkg)
+  }
+  suppressMessages(library(pkg, character.only = TRUE))
+}
+
+
+
+
+
+
+# -------------------------
+# Load and Prepare Data
+# -------------------------
+
+data_file_name <- "citibike.RData"  
+
+# Check if the data file exists
+if (!file.exists(data_file_name)) {
+  stop(paste("Data file", data_file_name, "not found in the working directory."))
+}
+
+# Attempt to read the data
+# First, check the file extension
+file_extension <- tools::file_ext(data_file_name)
+
+if (tolower(file_extension) == "rdata") {
+  # Load RData file
+  load(data_file_name)
+  # Assuming 'citibike' is the data object loaded
+  if (!exists("citibike")) {
+    stop("The data object 'citibike' was not found in the RData file.")
+  }
+  citibike_data <- as.data.frame(citibike)
+} else if (tolower(file_extension) == "csv") {
+  # Read CSV file
+  citibike_data <- read_csv(data_file_name)
+} else if (tolower(file_extension) %in% c("xls", "xlsx")) {
+  # Read Excel file
+  library(readxl)
+  citibike_data <- read_excel(data_file_name)
+} else {
+  stop("Unsupported file format. Please provide a .RData, .csv, or .xlsx file.")
+}
+
+# Check the structure of the data
+str(citibike_data)
+
+# **Verify that required columns are present**
+required_columns <- c("year", "month", "day", "hour", "demand", "wkday")
+
+if (!all(required_columns %in% colnames(citibike_data))) {
+  # If the required columns are not present, attempt to identify them
+  cat("Data does not contain all required columns.\n")
+  cat("Available columns are:\n")
+  print(colnames(citibike_data))
+  
+  # If the data has a single column, it may need to be parsed
+  if (ncol(citibike_data) == 1) {
+    # Attempt to parse the single column into multiple columns
+    citibike_data <- citibike_data %>%
+      separate(col = 1, into = required_columns, sep = ",", convert = TRUE)
+  }
+  
+  # Check again if required columns are present
+  if (!all(required_columns %in% colnames(citibike_data))) {
+    stop("Data does not contain the required columns after parsing. Please check your data file.")
+  }
+}
+
+# Convert columns to appropriate data types
+citibike_data <- citibike_data %>%
+  mutate(
+    year = as.integer(year),
+    month = as.integer(month),
+    day = as.integer(day),
+    hour = as.integer(hour),
+    demand = as.numeric(demand),
+    wkday = as.integer(wkday)
+  )
+
+# Handle any remaining NAs after type conversion
+citibike_data <- citibike_data %>%
+  drop_na()
+
+# Combine date and time components into a single datetime object
+citibike_data$datetime <- as.POSIXct(paste(citibike_data$year,
+                                           citibike_data$month,
+                                           citibike_data$day,
+                                           citibike_data$hour),
+                                     format = "%Y %m %d %H", tz = "America/New_York")
+
+# Arrange data by datetime
+citibike_data <- citibike_data %>%
+  arrange(datetime)
+
+
+# -------------------------
+# Data Preprocessing and Exploration
+# -------------------------
+
+# Check for missing values and handle them
+if (sum(is.na(citibike_data)) > 0) {
+  cat("Data contains missing values. Handling missing values...\n")
+  # Impute missing values using linear interpolation
+  citibike_data$demand <- na.approx(citibike_data$demand)
+}
+
+# Ensure there are no NAs in 'demand' after imputation
+citibike_data <- citibike_data %>%
+  filter(!is.na(demand))
+
+
+
+#-------------------------
+# Visualizations
+# -------------------------
+
+# Load necessary packages for plotting
+library(ggplot2)
+library(gridExtra)
+library(scales)
+
+# Visualize the demand over time
+ggplot(citibike_data, aes(x = datetime, y = demand)) +
+  geom_line(color = "black") +
+  labs(title = "Hourly Citi Bike Demand", x = "Date", y = "Demand") +
+  theme_minimal()
+
+
+# Visualize the demand over time
+ggplot(citibike_data, aes(x = datetime, y = demand)) +
+  geom_line(color = "black") +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +  # Add red trendline
+  labs(title = "Hourly Citi Bike Demand", x = "Date", y = "Demand") +
+  theme_minimal()
+
+
+# Examine the demand distribution
+ggplot(citibike_data, aes(x = demand)) +
+  geom_histogram(binwidth = 10, fill = "blue", color = "black") +
+  labs(title = "Distribution of Citi Bike Demand", x = "Demand", y = "Frequency") +
+  theme_minimal()
+```
+
+# Analysis of the data
+
+```{r}
+# Monthly and daily dynamics and data in boxplots
+
+# Monthly dynamics using a boxplot
+boxplot(demand ~ month, data = citibike_data, 
+        main = "Hourly Demand per Month", 
+        xlab = "Month (by index)", ylab = "Hourly Demand", col = "#B2DFDB")
+
+# Weekly dynamics using a boxplot
+boxplot(demand ~ wkday, data = citibike_data, 
+        main = "Hourly Demand Dynamics per Weekday", 
+        xlab = "Day of the Week (by index)", ylab = "Hourly Demand", col = "#B2DFDB")
+
+# Zoom into the first week to observe patterns
+ggplot(citibike_data %>% filter(datetime >= as.POSIXct("2023-01-01") &
+                                  datetime < as.POSIXct("2023-01-08")),
+       aes(x = datetime, y = demand)) +
+  geom_line(color = "black") +
+  labs(title = "Hourly Citi Bike Demand (First Week of January 2023)",
+       x = "Date", y = "Demand") +
+  theme_minimal()
+
+
+# Daily dynamics of the demand data of citibike
+
+# Boxplot for hourly demand
+boxplot(demand ~ hour, data = citibike_data, 
+        main = "Box Plots of Hourly Demand of Citi Bikes", 
+        ylab = "Demand", xlab = "Hour", col = "#B2DFDB")
+
+# Average Hourly Demand
+avg_hourly_demand <- rep(0, 24)
+for (i in 0:23) {
+  hour_i <- (citibike_data$hour == i)
+  hourly_demand_i <- citibike_data$demand[hour_i]
+  avg_hourly_demand[i + 1] <- mean(hourly_demand_i, na.rm = TRUE)
+}
+plot(0:23, avg_hourly_demand, type = "l", lwd = 2, xlab = "Hour", ylab = "Average Demand", 
+     main = "Average Hourly Demand")
+abline(v = 8, col = "red", lty = 2, lwd = 2)
+abline(v = 17, col = "blue", lty = 2, lwd = 2)
+legend(0.5, max(avg_hourly_demand, na.rm = TRUE) * 0.9, 
+       c("8:00", "17:00"), col = c("red", "blue"), lty = c(2, 2), lwd = c(2, 2))
+
+
+# Difference between weekdays and weekends
+
+# Only Weekdays
+# Define a vector with TRUE if it is a weekday
+weekdayindex <- c(1, 2, 3, 4, 5)
+weekdayvec <- (citibike_data$wkday %in% weekdayindex)
+
+# Filter the data for weekdays
+weekdays_data <- citibike_data[weekdayvec, ]
+
+# Boxplots for weekdays
+boxplot(demand ~ hour, data = weekdays_data, 
+        main = "Box Plots per Hour for Weekdays (Mon-Fri)", 
+        xlab = "Hour", ylab = "Demand", col = "#B2DFDB")
+
+# Average demand for weekdays
+average_wkday_hr <- rep(0, 24)
+for (i in 0:23) {
+  average_wkday_hr[i + 1] <- mean(weekdays_data$demand[weekdays_data$hour == i], na.rm = TRUE)
+}
+plot(0:23, average_wkday_hr, type = "l", lwd = 2, 
+     ylab = "Average Hourly Demand", xlab = "Hour", 
+     main = "Average Hourly Demand on Weekdays (Mon-Fri)")
+abline(v = 8, col = "red", lty = 2, lwd = 2)
+abline(v = 17, col = "blue", lty = 2, lwd = 2)
+legend(0.5, max(average_wkday_hr, na.rm = TRUE) * 0.9, 
+       c("8:00", "17:00"), col = c("red", "blue"), lty = c(2, 2), lwd = c(2, 2))
+
+# Only Weekends
+# Define a vector with TRUE if it is a weekend
+weekendindex <- c(6, 7)
+weekendvec <- (citibike_data$wkday %in% weekendindex)
+
+# Filter the data for weekends
+weekend_data <- citibike_data[weekendvec, ]
+
+# Boxplots for weekends
+boxplot(demand ~ hour, data = weekend_data, 
+        col = "#B2DFDB", main = "Box Plots per Hour for Weekends (Sat-Sun)", 
+        xlab = "Hour", ylab = "Demand")
+
+# Average demand for weekends
+average_wknd_hr <- rep(0, 24)
+for (i in 0:23) {
+  average_wknd_hr[i + 1] <- mean(weekend_data$demand[weekend_data$hour == i], na.rm = TRUE)
+}
+plot(0:23, average_wknd_hr, type = "l", lwd = 2, 
+     ylab = "Average Hourly Demand", xlab = "Hour", 
+     main = "Average Hourly Demand on Weekends (Sat-Sun)")
+abline(v = 8, col = "red", lty = 2, lwd = 2)
+abline(v = 17, col = "blue", lty = 2, lwd = 2)
+legend(0.5, max(average_wknd_hr, na.rm = TRUE) * 0.9, 
+       c("8:00", "17:00"), col = c("red", "blue"), lty = c(2, 2), lwd = c(2, 2))
+
+
+# Seasonality Analysis
+# -------------------------
+
+# Check for daily seasonality by plotting average demand by hour of day
+hourly_avg <- citibike_data %>%
+  group_by(hour) %>%
+  summarize(avg_demand = mean(demand, na.rm = TRUE))
+
+ggplot(hourly_avg, aes(x = hour, y = avg_demand)) +
+  geom_line(color = "black") +
+  labs(title = "Average Demand by Hour of Day", x = "Hour", y = "Average Demand") +
+  theme_minimal()
+
+# Check for weekly seasonality by plotting average demand by day of week
+# Compute average demand for each day of the week
+weekday_avg <- citibike_data %>%
+  group_by(wkday) %>%
+  summarize(avg_demand = mean(demand, na.rm = TRUE))
+
+# Plot average demand by day of the week
+ggplot(weekday_avg, aes(x = wkday, y = avg_demand)) +
+  geom_line(color = "black") +
+  scale_x_continuous(breaks = 1:7,
+                     labels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")) +
+  labs(title = "Average Demand by Day of Week", x = "Day of Week", y = "Average Demand") +
+  theme_minimal()
+
+
+# -------------------------
+# Stationarity Check
+# -------------------------
+
+# Check for stationarity using the Augmented Dickey-Fuller test
+library(tseries)
+adf_result <- adf.test(citibike_data$demand, alternative = "stationary")
+print(adf_result)
+
+# Interpretation:
+# If p-value < 0.05, we reject the null hypothesis of a unit root (stationary)
+# If p-value > 0.05, we fail to reject the null hypothesis (non-stationary)
+
+# Plot ACF and PACF to assess autocorrelation
+library(forecast)
+acf_plot <- ggAcf(citibike_data$demand, lag.max = 168) + # Up to a week of lags
+  ggtitle("ACF of Citi Bike Demand") +
+  theme_minimal()
+
+pacf_plot <- ggPacf(citibike_data$demand, lag.max = 168) +
+  ggtitle("PACF of Citi Bike Demand") +
+  theme_minimal()
+
+library(gridExtra)
+grid.arrange(acf_plot, pacf_plot, ncol = 2)
+
+# -------------------------
+# Seasonality Analysis
+# -------------------------
+
+# Check for daily seasonality by plotting average demand by hour of day
+hourly_avg <- citibike_data %>%
+  group_by(hour) %>%
+  summarize(avg_demand = mean(demand, na.rm = TRUE))
+
+ggplot(hourly_avg, aes(x = hour, y = avg_demand)) +
+  geom_line(color = "blue") +
+  labs(title = "Average Demand by Hour of Day", x = "Hour", y = "Average Demand") +
+  theme_minimal()
+
+# Check for weekly seasonality by plotting average demand by day of week
+weekday_avg <- citibike_data %>%
+  group_by(wkday) %>%
+  summarize(avg_demand = mean(demand, na.rm = TRUE))
+
+ggplot(weekday_avg, aes(x = wkday, y = avg_demand)) +
+  geom_line(color = "blue") +
+  scale_x_continuous(breaks = 1:7,
+                     labels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")) +
+  labs(title = "Average Demand by Day of Week", x = "Day of Week", y = "Average Demand") +
+  theme_minimal()
+
+
+# -------------------------
+# Define Training and Test Sets
+# -------------------------
+
+train_data <- citibike_data %>%
+  filter(datetime >= as.POSIXct("2023-01-01") & datetime < as.POSIXct("2023-05-01"))
+
+test_data <- citibike_data %>%
+  filter(datetime >= as.POSIXct("2023-05-01") & datetime < as.POSIXct("2023-06-01"))
+
+# Ensure that the training data is not empty
+if (nrow(train_data) == 0) {
+  stop("Training data is empty. Please check the date ranges and data.")
+}
+
+# Convert training demand data to a time series object
+# Frequency of 24 for hourly data with daily seasonality
+demand_ts <- ts(train_data$demand, frequency = 24)
+
+
+# -------------------------
+# Time Series Decomposition
+# -------------------------
+
+# Decompose the time series to observe components
+demand_decomp <- stl(demand_ts, s.window = "periodic")
+plot(demand_decomp)
+
+
+# -------------------------
+# ARIMA Models
+# -------------------------
+
+# Identify the order of differencing needed
+ndiffs_value <- ndiffs(demand_ts)
+nsdiffs_value <- nsdiffs(demand_ts)
+
+cat("Number of non-seasonal differences needed (d):", ndiffs_value, "\n")
+cat("Number of seasonal differences needed (D):", nsdiffs_value, "\n")
+
+# Difference the data as necessary
+demand_diff <- diff(demand_ts, differences = ndiffs_value)
+
+if (nsdiffs_value > 0) {
+  demand_diff <- diff(demand_diff, lag = frequency(demand_ts), differences = nsdiffs_value)
+}
+
+# Plot differenced series
+plot(demand_diff, main = "Differenced Demand Series", ylab = "Differenced Demand")
+
+# Plot ACF and PACF of differenced data
+acf_diff_plot <- ggAcf(demand_diff, lag.max = 168) +
+  ggtitle("ACF of Differenced Demand") +
+  theme_minimal()
+
+pacf_diff_plot <- ggPacf(demand_diff, lag.max = 168) +
+  ggtitle("PACF of Differenced Demand") +
+  theme_minimal()
+
+grid.arrange(acf_diff_plot, pacf_diff_plot, ncol = 2)
+
+
+# -------------------------
+# ARIMA Manual Modeling (1,1,1)
+# All other order have around the same values for AIC and BIC and residuals
+# -------------------------
+
+# Fit an ARIMA(1,1,1) model to the demand time series
+demand_arima <- arima(demand_ts, order = c(1, 1, 1))
+
+# Summary of the fitted ARIMA model
+summary(demand_arima)
+
+# Diagnostic Plots for ARIMA model
+# Residual diagnostics to check the fit
+checkresiduals(demand_arima)
+
+
+
+# Automatic ARIMA model without seasonal component (using default settings)
+arima_auto_model <- auto.arima(demand_ts, seasonal = FALSE,
+                               stepwise = TRUE, approximation = TRUE,
+                               max.p = 5, max.q = 5)
+
+summary(arima_auto_model)
+checkresiduals(arima_auto_model, lag.max = 168)
+
+```
+
+
+
+
+# -------------------------
+# Doing manual SARIMA using order SARIMA(1,1,1)(1,1,1) 
+# -------------------------
+
+# Fit the SARIMA model manually
+sarima_manual_model <- Arima(demand_ts,
+                             order = c(1, ndiffs_value, 1),
+                             seasonal = list(order = c(1, nsdiffs_value, 1), period = 24),
+                             include.constant = FALSE)
+
+summary(sarima_manual_model)
+
+# Check residuals with limited lags
+checkresiduals(sarima_manual_model, lag.max = 48)
+
+
+
+#Doing the Automatic SARIMA to check for best orders
+
+# Automatic ARIMA model with seasonal component (using default settings)
+sarima_auto_model <- auto.arima(demand_ts, seasonal = TRUE,
+                                stepwise = TRUE, approximation = TRUE,
+                                max.p = 5, max.q = 5, max.P = 2, max.Q = 2)
+
+summary(sarima_auto_model)
+checkresiduals(sarima_auto_model, lag.max = 48)
+
+
+# -------------------------
+# Exponential Smoothing Models
+# -------------------------
+
+# Fit ETS model
+ets_model <- ets(demand_ts)
+
+summary(ets_model)
+checkresiduals(ets_model)
+
+--------------------
+# Exponential Smoothing Models
+# -------------------------
+
+################### Exponential Smoothing Models ###############################
+# We consider all reasonable combinations of possible trends (No trend (N),
+# Additive (A), Damped Additive (A_d), Multiplicative (M), Damped Multiplicative 
+# (M_d)), seasonality (No (N), Additive (A) and Multiplicative (M) Seasonality)
+# and error terms (Multiplicative (M) and Additive (A)).
+
+# Due to the demand series containing 0s, exponential smoothing cannot use 
+# multiplicative error-terms.
+
+# As the chosen frequency is high (24), using multiplicative trends and 
+# multiplicative seasonality are not recommended. Hence, we only consider the 
+# exponential smoothing models with A error terms, {N, A, A_d} trends and 
+# {N, A} seasonality and compare them based on AIC, in line with 
+# Hyndmann & Khandakar (2008).
+  
+# Matrix to store AICs:
+A.AIC.df <- data.frame(matrix(NaN, nrow=3, ncol=2), row.names=c("N", "A", "A_d"))
+colnames(A.AIC.df) <- c("N", "A")
+
+# No trend, No stationarity (ANN)
+ANN.ets <- ets(demand_ts, model="ANN")
+summary(ANN.ets)
+A.AIC.df[1,1] <- ANN.ets$aic
+
+# No trend, Additive Seasonality (ANA)
+ANA.ets <- ets(demand_ts, model="ANA", damped=FALSE)
+summary(ANA.ets)
+A.AIC.df[1,2] <- ANA.ets$aic
+
+# Additive trend, No seasonality (AAN)
+AAN.ets <- ets(demand_ts, model="AAN", damped=FALSE)
+summary(AAN.ets)
+A.AIC.df[2,1] <- AAN.ets$aic
+
+# Additive trend, additive seasonality (AAA)
+AAA.ets <- ets(demand_ts, model="AAA", damped=FALSE)
+summary(AAA.ets)
+A.AIC.df[2,2] <- AAA.ets$aic
+
+# Damped Additive trend, no seasonality (AAdN)
+AAdN.ets <- ets(demand_ts, model="AAN", damped=TRUE)
+summary(AAdN.ets)
+A.AIC.df[3,1] <- AAdN.ets$aic
+
+# Damped additive trend, additive seasonality (AAdA)
+AAdA.ets <- ets(demand_ts, model="AAA", damped=TRUE)
+summary(AAdA.ets)
+A.AIC.df[3,2] <- AAdA.ets$aic
+
+# To show multiplicative trends/seasonality lead to error:
+# Damped Additive Trend, Multiplicative Seasonality 
+AMA.ets <- tryCatch({
+  ets(demand_ts, model="AMA", damped=FALSE)
+}, error = function(e) { cat("Error in fitting AMA model:", e$message, "\n") })
+
+# Choosing the optimal model can be done in multiple ways. In line with 
+# Hyndmann & Khandakar (2008), we choose the model that minimizes the AIC. This
+# corresponds to the exponential smoothing model with no trend and additive 
+# seasonality (see Table 1). However, the model with damped additive trend and 
+# additive seasonality performs only slightly worse. As we have observed a trend, 
+# especially in the last observations, it is worth considering this latter model
+# as well in the next step. In short, we consider the (A, N, A) and (A, A_d, A)
+# exponential smoothing models.
+
+# Plot Comparison of Exponential Smoothing Models - AIC and BIC
+exp_smoothing_df <- data.frame(
+  Model = c("ANN", "ANA", "AAN", "AAA", "AAdN", "AAdA"),
+  AIC = c(ANN.ets$aic, ANA.ets$aic, AAN.ets$aic, AAA.ets$aic, AAdN.ets$aic, AAdA.ets$aic),
+  BIC = c(ANN.ets$bic, ANA.ets$bic, AAN.ets$bic, AAA.ets$bic, AAdN.ets$bic, AAdA.ets$bic)
+)
+
+ggplot(exp_smoothing_df, aes(x = reorder(Model, AIC), y = AIC, fill = Model)) +
+  geom_col() +
+  geom_text(aes(label = round(AIC, 1)), hjust = -0.2) +
+  coord_flip() +
+  labs(title = "Exponential Smoothing Models - AIC Comparison", x = "Model", y = "AIC") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+ggplot(exp_smoothing_df, aes(x = reorder(Model, BIC), y = BIC, fill = Model)) +
+  geom_col() +
+  geom_text(aes(label = round(BIC, 1)), hjust = -0.2) +
+  coord_flip() +
+  labs(title = "Exponential Smoothing Models - BIC Comparison", x = "Model", y = "BIC") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+NOTE: The code for the ARIMA forecast is mentioned at the bottom
+
+# -------------------------
+# Out-of-sample Forecast Exercise
+# -------------------------
+
+# Ensure test data is not empty
+if (nrow(test_data) == 0) {
+  stop("Test data is empty. Please check the date ranges and data.")
+}
+
+# Forecast horizon (24 hours)
+h <- 24
+
+# Number of iterations based on forecast horizon
+n_iterations <- floor(nrow(test_data) / h)
+
+# Convert training data to a time series with frequency 24
+train_ts <- ts(train_data$demand, frequency = 24)
+
+# Determine best SARIMA orders using initial training data
+best_sarima_model <- auto.arima(train_ts, seasonal = TRUE,
+                               stepwise = TRUE, approximation = FALSE,
+                               max.p = 5, max.q = 5, max.P = 2, max.Q = 2,
+                               max.d = 2, max.D = 1)
+best_order <- arimaorder(best_sarima_model)
+
+# Print best_order to inspect its components
+print("Best SARIMA order:")
+print(best_order)
+
+# Function to perform forecasting with specified models
+forecast_models <- function(train_ts, h) {
+  # Remove any NA values
+  train_ts <- na.omit(train_ts)
+  
+  # Fit SARIMA model using detected best order
+  model_sarima_fixed <- Arima(train_ts,
+                               order = c(best_order["p"], best_order["d"], best_order["q"]),
+                               seasonal = list(order = c(best_order["P"], best_order["D"], best_order["Q"]),
+                                               period = 24),
+                               include.constant = FALSE)
+  
+  # Fit ETS model
+  model_ets <- ets(train_ts)
+  
+  # Generate forecasts
+  fc_sarima_fixed <- forecast(model_sarima_fixed, h = h)$mean
+  fc_ets <- forecast(model_ets, h = h)$mean
+  
+  # Return forecasts
+  list(
+    SARIMA_Fixed = fc_sarima_fixed,
+    ETS = fc_ets
+  )
+}
+
+# Initialize lists to store forecasts and actuals
+forecasts_rolling <- list()
+actuals_list <- list()
+
+# Define a larger rolling window size to ensure adequate data
+window_size <- 24 * 7 * 4  # Four weeks of data
+
+# Rolling Window Forecasting
+for (i in 0:(n_iterations - 1)) {
+  # Rolling window with fixed size
+  train_end_index <- nrow(train_data) + i * h
+  train_start_index <- max(1, train_end_index - window_size + 1)
+  train_indices <- train_start_index:train_end_index
+  train_window <- citibike_data$demand[train_indices]
+  
+  # Convert to time series
+  train_ts <- ts(train_window, frequency = 24)
+  
+  # Generate forecasts
+  forecasts <- forecast_models(train_ts, h)
+  
+  # Store forecasts
+  forecasts_rolling[[i + 1]] <- forecasts
+  
+  # Store actual values
+  actual_indices <- (train_end_index + 1):(train_end_index + h)
+  actual_values <- citibike_data$demand[actual_indices]
+  actuals_list[[i + 1]] <- actual_values
+}
+
+# -------------------------
+# Combine Forecasts and Actuals into Data Frames
+# -------------------------
+
+results_list <- list()
+for (i in 1:length(forecasts_rolling)) {
+  forecast_i <- forecasts_rolling[[i]]
+  actual_i <- actuals_list[[i]]
+  
+  # Get time indices
+  start_index <- nrow(train_data) + (i - 1) * h + 1
+  end_index <- nrow(train_data) + i * h
+  time_i <- citibike_data$datetime[start_index:end_index]
+  
+  # Ensure all vectors have the same length
+  min_length <- min(
+    length(time_i),
+    length(actual_i),
+    length(forecast_i$SARIMA_Fixed),
+    length(forecast_i$ETS)
+  )
+  
+  # If any of them have zero length, skip this iteration
+  if (min_length == 0) {
+    next
+  }
+  
+  # Truncate vectors to min_length
+  time_i <- time_i[1:min_length]
+  actual_i <- actual_i[1:min_length]
+  forecast_SARIMA_Fixed <- as.numeric(forecast_i$SARIMA_Fixed[1:min_length])
+  forecast_ETS <- as.numeric(forecast_i$ETS[1:min_length])
+  
+  # Create data.frame with correct variable names
+  result_df <- data.frame(
+    Time = time_i,
+    Actual = actual_i,
+    SARIMA_Fixed = forecast_SARIMA_Fixed,
+    ETS = forecast_ETS
+  )
+  
+  results_list[[i]] <- result_df
+}
+
+# Combine all results
+results_rolling <- do.call(rbind, results_list)
+
+# -------------------------
+# Out-of-sample Forecast Comparisons
+# -------------------------
+
+# Calculate error metrics
+models <- c("SARIMA_Fixed", "ETS")
+error_metrics <- data.frame(Model = models,
+                            RMSE = NA, MAE = NA, MAPE = NA)
+
+for (i in 1:length(models)) {
+  model_name <- models[i]
+  errors <- results_rolling$Actual - results_rolling[[model_name]]
+  
+  error_metrics$RMSE[i] <- sqrt(mean(errors^2, na.rm = TRUE))
+  error_metrics$MAE[i] <- mean(abs(errors), na.rm = TRUE)
+  error_metrics$MAPE[i] <- mean(abs(errors / results_rolling$Actual), na.rm = TRUE) * 100
+}
+
+print("Out-of-sample Forecast Error Metrics (Rolling Window):")
+print(error_metrics)
+
+# -------------------------
+# Visualize Forecasts vs Actuals
+# -------------------------
+
+# Plot forecasts for a sample period (e.g., first week of May)
+sample_period <- results_rolling %>%
+  filter(Time >= as.POSIXct("2023-05-01") & Time < as.POSIXct("2023-05-7"))
+
+ggplot(sample_period, aes(x = Time)) +
+  geom_line(aes(y = Actual), color = "black", linewidth = 1) +
+  geom_line(aes(y = SARIMA_Fixed), color = "red", linetype = "dashed") +
+  geom_line(aes(y = ETS), color = "green", linetype = "twodash") +
+  labs(title = "Forecasts vs Actual Demand (First Week of May 2023)",
+       x = "Date", y = "Demand") +
+  theme_minimal() +
+  scale_x_datetime(labels = scales::date_format("%Y-%m-%d"),
+                   breaks = scales::date_breaks("1 day")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+# -------------------------
+# Out-of-sample Forecast Exercise (Expanding Window)
+# -------------------------
+
+# Ensure test data is not empty
+if (nrow(test_data) == 0) {
+  stop("Test data is empty. Please check the date ranges and data.")
+}
+
+# Forecast horizon (24 hours)
+h <- 24
+
+# Number of iterations based on forecast horizon
+n_iterations <- floor(nrow(test_data) / h)
+
+# Convert training data to a time series with frequency 24
+train_ts <- ts(train_data$demand, frequency = 24)
+
+# Determine best SARIMA orders using initial training data
+best_sarima_model <- auto.arima(train_ts, seasonal = TRUE,
+                                stepwise = TRUE, approximation = FALSE,
+                                max.p = 5, max.q = 5, max.P = 2, max.Q = 2,
+                                max.d = 2, max.D = 1)
+best_order <- arimaorder(best_sarima_model)
+
+# Print best_order to inspect its components
+print("Best SARIMA order:")
+print(best_order)
+
+# Function to perform forecasting with specified models
+forecast_models <- function(train_ts, h) {
+  # Remove any NA values
+  train_ts <- na.omit(train_ts)
+  
+  # Fit SARIMA model using detected best order
+  model_sarima_fixed <- Arima(train_ts,
+                              order = c(best_order["p"], best_order["d"], best_order["q"]),
+                              seasonal = list(order = c(best_order["P"], best_order["D"], best_order["Q"]),
+                                              period = 24),
+                              include.constant = FALSE)
+  
+  # Fit ETS model
+  model_ets <- ets(train_ts)
+  
+  # Generate forecasts
+  fc_sarima_fixed <- forecast(model_sarima_fixed, h = h)$mean
+  fc_ets <- forecast(model_ets, h = h)$mean
+  
+  # Return forecasts
+  list(
+    SARIMA_Fixed = fc_sarima_fixed,
+    ETS = fc_ets
+  )
+}
+
+# Initialize lists to store forecasts and actuals
+forecasts_expanding <- list()
+actuals_list <- list()
+
+# Expanding Window Forecasting
+for (i in 0:(n_iterations - 1)) {
+  # Expanding window: training data includes all data up to current point
+  train_end_index <- nrow(train_data) + i * h
+  train_start_index <- 1  # Start from the beginning each time
+  train_indices <- train_start_index:train_end_index
+  train_window <- citibike_data$demand[train_indices]
+  
+  # Convert to time series
+  train_ts <- ts(train_window, frequency = 24)
+  
+  # Generate forecasts
+  forecasts <- forecast_models(train_ts, h)
+  
+  # Store forecasts
+  forecasts_expanding[[i + 1]] <- forecasts
+  
+  # Store actual values
+  actual_indices <- (train_end_index + 1):(train_end_index + h)
+  actual_values <- citibike_data$demand[actual_indices]
+  actuals_list[[i + 1]] <- actual_values
+}
+
+# -------------------------
+# Combine Forecasts and Actuals into Data Frames
+# -------------------------
+
+results_list <- list()
+for (i in 1:length(forecasts_expanding)) {
+  forecast_i <- forecasts_expanding[[i]]
+  actual_i <- actuals_list[[i]]
+  
+  # Get time indices
+  start_index <- nrow(train_data) + (i - 1) * h + 1
+  end_index <- nrow(train_data) + i * h
+  time_i <- citibike_data$datetime[start_index:end_index]
+  
+  # Ensure all vectors have the same length
+  min_length <- min(
+    length(time_i),
+    length(actual_i),
+    length(forecast_i$SARIMA_Fixed),
+    length(forecast_i$ETS)
+  )
+  
+  # If any of them have zero length, skip this iteration
+  if (min_length == 0) {
+    next
+  }
+  
+  # Truncate vectors to min_length
+  time_i <- time_i[1:min_length]
+  actual_i <- actual_i[1:min_length]
+  forecast_SARIMA_Fixed <- as.numeric(forecast_i$SARIMA_Fixed[1:min_length])
+  forecast_ETS <- as.numeric(forecast_i$ETS[1:min_length])
+  
+  # Create data.frame with correct variable names
+  result_df <- data.frame(
+    Time = time_i,
+    Actual = actual_i,
+    SARIMA_Fixed = forecast_SARIMA_Fixed,
+    ETS = forecast_ETS
+  )
+  
+  results_list[[i]] <- result_df
+}
+
+# Combine all results
+results_expanding <- do.call(rbind, results_list)
+
+# -------------------------
+# Out-of-sample Forecast Comparisons
+# -------------------------
+
+# Calculate error metrics
+models <- c("SARIMA_Fixed", "ETS")
+error_metrics <- data.frame(Model = models,
+                            RMSE = NA, MAE = NA, MAPE = NA)
+
+for (i in 1:length(models)) {
+  model_name <- models[i]
+  errors <- results_expanding$Actual - results_expanding[[model_name]]
+  
+  error_metrics$RMSE[i] <- sqrt(mean(errors^2, na.rm = TRUE))
+  error_metrics$MAE[i] <- mean(abs(errors), na.rm = TRUE)
+  error_metrics$MAPE[i] <- mean(abs(errors / results_expanding$Actual), na.rm = TRUE) * 100
+}
+
+print("Out-of-sample Forecast Error Metrics (Expanding Window):")
+print(error_metrics)
+
+# -------------------------
+# Visualize Forecasts vs Actuals
+# -------------------------
+
+# Plot forecasts for a sample period (e.g., first week of May)
+sample_period <- results_expanding %>%
+  filter(Time >= as.POSIXct("2023-05-02") & Time < as.POSIXct("2023-05-7"))
+
+ggplot(sample_period, aes(x = Time)) +
+  geom_line(aes(y = Actual), color = "black", linewidth = 1) +
+  geom_line(aes(y = SARIMA_Fixed), color = "red", linetype = "dashed") +
+  geom_line(aes(y = ETS), color = "green", linetype = "twodash") +
+  labs(title = "Forecasts vs Actual Demand (First Week of May 2023)",
+       x = "Date", y = "Demand") +
+  theme_minimal() +
+  scale_x_datetime(labels = scales::date_format("%Y-%m-%d"),
+                   breaks = scales::date_breaks("1 day")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+# -------------------------
+# Out-of-sample Forecast Exercise (Expanding Window)
+# -------------------------
+#Now with a contrain that the ETS model can not forecast negative values
+
+
+# Ensure test data is not empty
+if (nrow(test_data) == 0) {
+  stop("Test data is empty. Please check the date ranges and data.")
+}
+
+# Forecast horizon (24 hours)
+h <- 24
+
+# Number of iterations based on forecast horizon
+n_iterations <- floor(nrow(test_data) / h)
+
+# Convert training data to a time series with frequency 24
+train_ts <- ts(train_data$demand, frequency = 24)
+
+# Use the given best SARIMA order
+best_order <- c(p = 2, d = 0, q = 0, P = 2, D = 1, Q = 0, frequency = 24)
+
+# Print best_order to inspect its components
+print("Best SARIMA order:")
+print(best_order)
+
+# Function to perform forecasting with specified models
+forecast_models <- function(train_ts, h) {
+  # Remove any NA values
+  train_ts <- na.omit(train_ts)
+  
+  # Fit SARIMA model using the given best order
+  model_sarima_fixed <- Arima(train_ts,
+                              order = c(best_order["p"], best_order["d"], best_order["q"]),
+                              seasonal = list(order = c(best_order["P"], best_order["D"], best_order["Q"]),
+                                              period = best_order["frequency"]),
+                              include.constant = FALSE)
+  
+  # Fit ETS model with additive components
+  model_ets <- ets(train_ts, model = "AAA")  # Additive error, trend, and seasonality
+  
+  # Generate forecasts
+  fc_sarima_fixed <- forecast(model_sarima_fixed, h = h)$mean
+  fc_ets <- forecast(model_ets, h = h)$mean
+  
+  # Ensure forecasts are non-negative
+  fc_sarima_fixed[fc_sarima_fixed < 0] <- 0
+  fc_ets[fc_ets < 0] <- 0
+  
+  # Return forecasts
+  list(
+    SARIMA_Fixed = fc_sarima_fixed,
+    ETS = fc_ets
+  )
+}
+
+# Initialize lists to store forecasts and actuals
+forecasts_expanding <- list()
+actuals_list <- list()
+
+# Expanding Window Forecasting
+for (i in 0:(n_iterations - 1)) {
+  # Expanding window: training data includes all data up to current point
+  train_end_index <- nrow(train_data) + i * h
+  train_start_index <- 1  # Start from the beginning each time
+  train_indices <- train_start_index:train_end_index
+  train_window <- citibike_data$demand[train_indices]
+  
+  # Convert to time series
+  train_ts <- ts(train_window, frequency = 24)
+  
+  # Generate forecasts
+  forecasts <- forecast_models(train_ts, h)
+  
+  # Store forecasts
+  forecasts_expanding[[i + 1]] <- forecasts
+  
+  # Store actual values
+  actual_indices <- (train_end_index + 1):(train_end_index + h)
+  actual_values <- citibike_data$demand[actual_indices]
+  actuals_list[[i + 1]] <- actual_values
+}
+
+# -------------------------
+# Combine Forecasts and Actuals into Data Frames
+# -------------------------
+
+results_list <- list()
+for (i in 1:length(forecasts_expanding)) {
+  forecast_i <- forecasts_expanding[[i]]
+  actual_i <- actuals_list[[i]]
+  
+  # Get time indices
+  start_index <- nrow(train_data) + (i - 1) * h + 1
+  end_index <- nrow(train_data) + i * h
+  time_i <- citibike_data$datetime[start_index:end_index]
+  
+  # Ensure all vectors have the same length
+  min_length <- min(
+    length(time_i),
+    length(actual_i),
+    length(forecast_i$SARIMA_Fixed),
+    length(forecast_i$ETS)
+  )
+  
+  # If any of them have zero length, skip this iteration
+  if (min_length == 0) {
+    next
+  }
+  
+  # Truncate vectors to min_length
+  time_i <- time_i[1:min_length]
+  actual_i <- actual_i[1:min_length]
+  forecast_SARIMA_Fixed <- as.numeric(forecast_i$SARIMA_Fixed[1:min_length])
+  forecast_ETS <- as.numeric(forecast_i$ETS[1:min_length])
+  
+  # Create data.frame with correct variable names
+  result_df <- data.frame(
+    Time = time_i,
+    Actual = actual_i,
+    SARIMA_Fixed = forecast_SARIMA_Fixed,
+    ETS = forecast_ETS
+  )
+  
+  results_list[[i]] <- result_df
+}
+
+# Combine all results
+results_expanding <- do.call(rbind, results_list)
+
+# -------------------------
+# Out-of-sample Forecast Comparisons
+# -------------------------
+
+# Calculate error metrics
+models <- c("SARIMA_Fixed", "ETS")
+error_metrics <- data.frame(Model = models,
+                            RMSE = NA, MAE = NA, MAPE = NA)
+
+for (i in 1:length(models)) {
+  model_name <- models[i]
+  errors <- results_expanding$Actual - results_expanding[[model_name]]
+  
+  error_metrics$RMSE[i] <- sqrt(mean(errors^2, na.rm = TRUE))
+  error_metrics$MAE[i] <- mean(abs(errors), na.rm = TRUE)
+  error_metrics$MAPE[i] <- mean(abs(errors / results_expanding$Actual), na.rm = TRUE) * 100
+}
+
+print("Out-of-sample Forecast Error Metrics (Expanding Window):")
+print(error_metrics)
+
+# -------------------------
+# Visualize Forecasts vs Actuals
+# -------------------------
+
+# Plot forecasts for a sample period (e.g., first week of May)
+sample_period <- results_expanding %>%
+  filter(Time >= as.POSIXct("2023-05-01") & Time < as.POSIXct("2023-05-07"))
+
+ggplot(sample_period, aes(x = Time)) +
+  geom_line(aes(y = Actual), color = "black", linewidth = 1) +
+  geom_line(aes(y = SARIMA_Fixed), color = "red", linetype = "dashed") +
+  geom_line(aes(y = ETS), color = "green", linetype = "twodash") +
+  labs(title = "Forecasts vs Actual Demand (First Week of May 2023)",
+       x = "Date", y = "Demand") +
+  theme_minimal() +
+  scale_x_datetime(labels = scales::date_format("%Y-%m-%d"),
+                   breaks = scales::date_breaks("1 day")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+# -------------------------
+# Required Libraries
+# -------------------------
+
+# Ensure necessary packages are installed and loaded
+if (!requireNamespace("tseries", quietly = TRUE)) {
+  install.packages("tseries")
+}
+if (!requireNamespace("MCS", quietly = TRUE)) {
+  install.packages("MCS")
+}
+library(tseries)
+library(MCS)
+library(dplyr)
+
+# -------------------------
+# Assessing Significance of Forecast Results
+# -------------------------
+
+# Prepare forecast errors
+results_rolling <- results_rolling %>%
+  mutate(
+    Error_SARIMA_Fixed = Actual - SARIMA_Fixed,
+    Error_ETS = Actual - ETS
+  )
+
+# -------------------------
+# Diebold-Mariano (DM) Test
+# -------------------------
+
+# Remove any NA values and ensure errors are aligned
+errors_df <- results_rolling %>%
+  select(Time, Error_SARIMA_Fixed, Error_ETS) %>%
+  na.omit()
+
+# Ensure there are enough forecast errors for the test
+if (nrow(errors_df) >= h) {
+  # Extract error vectors
+  error_sarima_fixed <- errors_df$Error_SARIMA_Fixed
+  error_ets <- errors_df$Error_ETS
+  
+  # Perform Diebold-Mariano Test
+  dm_test_result <- dm.test(
+    e1 = error_sarima_fixed,
+    e2 = error_ets,
+    alternative = "two.sided",
+    h = h,
+    power = 2
+  )
+  
+  # Print DM test results
+  print("Diebold-Mariano Test between SARIMA and ETS models:")
+  print(dm_test_result)
+} else {
+  cat("Not enough forecast errors to perform Diebold-Mariano test.\n")
+}
+
+# -------------------------
+# Model Confidence Set (MCS) Procedure
+# -------------------------
+
+# Check for NAs in forecast errors
+error_columns <- c("Error_SARIMA_Fixed", "Error_ETS")
+na_counts <- sapply(results_rolling[error_columns], function(x) sum(is.na(x)))
+print("NA counts in forecast errors:")
+print(na_counts)
+
+# If NAs are present, remove corresponding rows
+results_clean <- results_rolling %>%
+  filter(!is.na(Error_SARIMA_Fixed) & !is.na(Error_ETS))
+
+# Prepare loss matrix (e.g., squared errors)
+loss_matrix <- data.frame(
+  SARIMA_Fixed = (results_clean$Error_SARIMA_Fixed)^2,
+  ETS = (results_clean$Error_ETS)^2
+)
+
+# Ensure all columns are numeric
+loss_matrix[] <- lapply(loss_matrix, as.numeric)
+
+# Verify loss matrix
+str(loss_matrix)
+summary(loss_matrix)
+
+# Ensure there are enough observations
+if (nrow(loss_matrix) < 2) {
+  stop("Not enough observations in the loss matrix to perform MCS procedure.")
+}
+
+# Apply MCS procedure
+set.seed(123) # For reproducibility
+mcs_result <- MCS::MCSprocedure(Loss = as.matrix(loss_matrix),
+                                alpha = 0.05,
+                                B = 5000,
+                                statistic = "Tmax")
+
+# Check the class of mcs_result
+print("Class of mcs_result:")
+print(class(mcs_result))
+
+# Inspect the structure of mcs_result
+print("Structure of mcs_result:")
+str(mcs_result)
+
+# Access the models included in the Model Confidence Set
+print("Model Confidence Set Result:")
+print(mcs_result@Info$model.names)
+
+# -------------------------
+# Interpretation of Results
+# -------------------------
+
+# Interpretation for DM Test
+if (exists("dm_test_result") && !is.null(dm_test_result)) {
+  if (dm_test_result$p.value < 0.05) {
+    print("The Diebold-Mariano test indicates a statistically significant difference in forecast accuracy between SARIMA and ETS models.")
+  } else {
+    print("The Diebold-Mariano test indicates no statistically significant difference in forecast accuracy between SARIMA and ETS models.")
+  }
+}
+
+# Interpretation for MCS
+if (exists("mcs_result")) {
+  print("MCS identifies the following models as statistically indistinguishable in terms of forecasting accuracy:")
+  print(mcs_result@Info$model.names)
+}
+
+
+
+# -------------------------
+# Combine Forecasts and Actuals for ARIMA
+# -------------------------
+
+results_arima <- do.call(rbind, lapply(1:length(forecasts_rolling), function(i) {
+  # Calculate the end index for the training data
+  train_end_index <- nrow(train_data) + (i - 1) * h
+  
+  # Ensure indices are within bounds
+  if (train_end_index > nrow(citibike_data)) {
+    stop(paste("train_end_index out of bounds for iteration", i))
+  }
+  
+  # Retrieve the actual indices for this forecast
+  actual_indices <- (train_end_index + 1):(train_end_index + h)
+  
+  # Check if actual_indices are within bounds
+  if (max(actual_indices) > nrow(citibike_data)) {
+    stop(paste("Not enough data for forecast horizon at iteration", i))
+  }
+  
+  # Extract Time from citibike_data$datetime
+  time_sequence <- citibike_data$datetime[actual_indices]
+  
+  # Validate forecast and actual lengths
+  if (length(actuals_list[[i]]) < h || length(forecasts_rolling[[i]]$ARIMA) < h) {
+    stop(paste("Insufficient data for iteration", i))
+  }
+  
+  # Combine ARIMA forecasts and actuals into a data frame
+  data.frame(
+    Time = time_sequence,
+    Actual = actuals_list[[i]][1:h],
+    ARIMA = as.numeric(forecasts_rolling[[i]]$ARIMA[1:h])
+  )
+}))
+
+# -------------------------
+# Visualize ARIMA Forecast vs Actuals
+# -------------------------
+
+# Sample period for visualization (e.g., first week of May)
+sample_period_arima <- results_arima %>%
+  filter(Time >= as.POSIXct("2023-05-01") & Time < as.POSIXct("2023-05-07"))
+
+# Plot actuals and ARIMA forecasts
+ggplot(sample_period_arima, aes(x = Time)) +
+  geom_line(aes(y = Actual), color = "black", linewidth = 1, linetype = "solid") +
+  geom_line(aes(y = ARIMA), color = "blue", linetype = "dotted") +
+  labs(title = "ARIMA Forecast vs Actual Demand (First Week of May 2023)",
+       x = "Date", y = "Demand") +
+  theme_minimal() +
+  scale_x_datetime(labels = scales::date_format("%Y-%m-%d"),
+                   breaks = scales::date_breaks("1 day")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
